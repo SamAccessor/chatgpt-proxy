@@ -13,7 +13,7 @@ app.post("/chat", async (req, res) => {
 
   try {
     const response = await axios.post(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent",
+      "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent",
       {
         contents: [
           {
