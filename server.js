@@ -29,13 +29,20 @@ app.post("/chat", async (req, res) => {
       }
     );
 
-    res.json({ reply: response.data.choices[0].message.content });
-  } catch (err) {
-    if (err.code === 'ERR_CANCELED') {
-      console.error("Request was aborted by the client (likely timeout or network issue)");
-    } else {
-      console.error("OPENROUTER ERROR:", err?.response?.data || err?.message || err);
+    console.log("Raw OpenRouter Response:", response.data);
+
+    const reply = response?.data?.choices?.[0]?.message?.content;
+
+    if (!reply) {
+      console.error("No valid reply received.");
+      return res.status(500).send("No valid reply from OpenRouter.");
     }
+
+    res.json({ reply });
+  } catch (err) {
+    console.error("===== OPENROUTER ERROR START =====");
+    console.error(err?.response?.data || err?.message || err);
+    console.error("===== OPENROUTER ERROR END =====");
     res.status(500).send("OpenRouter request failed");
   }
 });
