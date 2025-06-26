@@ -13,30 +13,30 @@ app.post("/chat", async (req, res) => {
 
   try {
     const response = await axios.post(
-      "https://openrouter.ai/api/v1/chat/completions",
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
-        model: "deepseek/deepseek-r1-0528:free",
-        messages: [{ role: "user", content: prompt }]
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: prompt }]
+          }
+        ]
       },
       {
         headers: {
-          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-          "HTTP-Referer": "https://chatgpt-proxy.onrender.com", // Customize
-          "X-Title": "Render Proxy",
           "Content-Type": "application/json"
-        },
-        timeout: 30000
+        }
       }
     );
 
-    res.json({ reply: response.data.choices[0].message.content });
+    const reply = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
+    res.json({ reply: reply || "No reply generated." });
   } catch (err) {
-    console.error("OPENROUTER ERROR:", err?.response?.data || err?.message);
-    res.status(500).send("OpenRouter request failed");
+    console.error("GEMINI ERROR:", err?.response?.data || err?.message);
+    res.status(500).send("Gemini request failed");
   }
 });
 
 const PORT = process.env.PORT || 3000;
 console.log("Starting server...");
 app.listen(PORT, () => console.log("Server running on port " + PORT));
-
