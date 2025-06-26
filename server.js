@@ -15,7 +15,7 @@ app.post("/chat", async (req, res) => {
     const response = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
-        model: "mistralai/mistral-small-3.2-24b-instruct:free",
+        model: "mistralai/mistral-small-3.2-24b-instruct:free", // You can change model here
         messages: [{ role: "user", content: prompt }]
       },
       {
@@ -29,12 +29,14 @@ app.post("/chat", async (req, res) => {
       }
     );
 
-    console.log("Raw OpenRouter Response:", response.data);
+    console.log("=== Raw OpenRouter Response ===");
+    console.log(JSON.stringify(response.data, null, 2));
 
-    const reply = response?.data?.choices?.[0]?.message?.content;
+    const messageObj = response?.data?.choices?.[0]?.message;
+    const reply = messageObj?.content;
 
     if (!reply) {
-      console.error("No valid reply received.");
+      console.error("❌ No reply content in the response.");
       return res.status(500).send("No valid reply from OpenRouter.");
     }
 
