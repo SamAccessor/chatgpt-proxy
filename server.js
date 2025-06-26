@@ -13,35 +13,28 @@ app.post("/chat", async (req, res) => {
 
   try {
     const response = await axios.post(
-      "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent",
+      "https://openrouter.ai/api/v1/chat/completions",
       {
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: prompt }]
-          }
-        ]
+        model: "deepseek/deepseek-r1-0528:free",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.7
       },
       {
         headers: {
-          "Content-Type": "application/json"
-        },
-        params: {
-          key: process.env.GEMINI_API_KEY
-        },
-        timeout: 30000
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://yourdomain.com", // Replace if needed
+          "X-Title": "Roblox Quiz Generator"
+        }
       }
     );
 
-    const reply = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (reply) {
-      res.json({ reply });
-    } else {
-      res.status(500).json({ error: "Empty or invalid response from Gemini" });
-    }
-  } catch (err) {
-    console.error("GEMINI ERROR:", err?.response?.data || err.message || err);
-    res.status(500).send("Gemini API request failed");
+    const message = response.data.choices?.[0]?.message?.content;
+    if (!message) throw new Error("No response message found");
+    res.json({ reply: message });
+  } catch (error) {
+    console.error("OPENROUTER ERROR:", error?.response?.data || error.message);
+    res.status(500).json({ error: "Failed to fetch response from OpenRouter." });
   }
 });
 
