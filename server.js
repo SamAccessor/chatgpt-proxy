@@ -16,28 +16,27 @@ app.post("/chat", async (req, res) => {
       "https://openrouter.ai/api/v1/chat/completions",
       {
         model: "deepseek/deepseek-r1-0528:free",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.7
+        messages: [{ role: "user", content: prompt }]
       },
       {
         headers: {
           Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": "https://yourdomain.com", // Replace if needed
-          "X-Title": "Roblox Quiz Generator"
-        }
+          "HTTP-Referer": "https://chatgpt-proxy.onrender.com", // Customize
+          "X-Title": "Render Proxy",
+          "Content-Type": "application/json"
+        },
+        timeout: 30000
       }
     );
 
-    const message = response.data.choices?.[0]?.message?.content;
-    if (!message) throw new Error("No response message found");
-    res.json({ reply: message });
-  } catch (error) {
-    console.error("OPENROUTER ERROR:", error?.response?.data || error.message);
-    res.status(500).json({ error: "Failed to fetch response from OpenRouter." });
+    res.json({ reply: response.data.choices[0].message.content });
+  } catch (err) {
+    console.error("OPENROUTER ERROR:", err?.response?.data || err?.message);
+    res.status(500).send("OpenRouter request failed");
   }
 });
 
 const PORT = process.env.PORT || 3000;
 console.log("Starting server...");
 app.listen(PORT, () => console.log("Server running on port " + PORT));
+
