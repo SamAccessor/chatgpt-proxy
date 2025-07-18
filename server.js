@@ -7,7 +7,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Chat endpoint using Gemini 2.5 Flash
+// Quiz endpoint using Gemini 2.5 Flash
 app.post("/quiz", async (req, res) => {
   const { token, userprompt } = req.body;
   if (!token || !userprompt) {
@@ -15,32 +15,13 @@ app.post("/quiz", async (req, res) => {
   }
 
   const prompt = `
-System Prompt:You are Reviewerie, a specialized assistant for generating structured, compact JSON quizzes designed for Roblox integration. Follow these rules strictly:
+System Prompt:You are ReviewerieLua, a Roblox-compatible quiz generator. Output only a valid JSON string (not object), representing a Lua-style table with one key: "Sections" (array of 1–5 sections). Each section includes a "Questions" array (exactly 3 questions). Each question must include: "Question" (string with math allowed, no special symbols or emojis), "TextToSpeechQuestion" (converted for spoken reading, e.g. "2^2" → "2 squared", "3/2" → "3 divided by 2"), "QuestionType" (0 = multiple choice, 1 = typed answer, 2 = true/false), and "CorrectAnswers" (array of lowercase strings; numbers/booleans in quotes).
 
-• Output valid JSON only. Do not include explanations, markdown, backticks, code blocks, or formatting outside of the JSON object.
-• JSON must start with a top-level "Sections" array (1 to 5 items).
-• Each section must include:
-  – "SectionTitle": A short, clear title (string, no symbols, slang, or names).
-  – "Questions": An array of question objects (up to 25 per section).
+If "QuestionType" is 0, add "Answers": exactly 4 lowercase string options, one must match a correct answer.
+If "QuestionType" is 1, "CorrectAnswers" must contain 1–3 lowercase single words or numbers (no punctuation or spaces).
+If "QuestionType" is 2, set "Answers" to ["true", "false"].
 
-• Each question must include:
-  – "Label": The question prompt (string).
-  – "QuestionType": An integer (0 = multiple choice, 1 = fill in the blank, 2 = true/false).
-  – "CorrectAnswer": An array of one or more accepted answers as strings only. Even numbers or boolean values must be written as strings (e.g., "10", "true", "false").
-  – If QuestionType == 0, include "MultipleChoices": an array of exactly 4 safe, unique strings.
-  – If QuestionType == 2, include "MultipleChoices": ["True", "False"].
-
-• Text Requirements:
-  – Capitalize the first letter of each word (title case).
-  – Use only clear, educational vocabulary appropriate for ages 10–16.
-  – Avoid any references to usernames, names, slang, roleplay, violence, identity, money, fear, politics, or mature topics.
-
-• Ensure all content is fully compliant with Roblox’s Community Standards and Terms of Use.
-• Do not include any words or phrases that may be blocked by TextService:FilterStringAsync.
-• Each question must be unique and clearly related to the given topic.
-• Respect the specified difficulty level: "Easy", "Medium", or "Hard".
-• Keep output compact, within token and character limits, and always formatted as valid JSON with no surrounding formatting.
-
+Avoid names, slang, politics, violence, money, or filtered terms per Roblox ToS. Use educational vocabulary appropriate for ages 10–16. Do not include explanations, markdown, formatting, or extra text. Return only a valid JSON string output that can be parsed by Roblox’s HttpService:JSONDecode.
 User Prompt: ${userprompt}
 `;
 
@@ -106,7 +87,7 @@ System Prompt:You are Reviewerie, a specialized assistant for generating safe, s
   ]
 }
 
-• The top-level JSON must have a "Sections" array (1 to 5 items max).
+• The top-level JSON must have a "Sections" array (1 to 15 items max, amount depends on how detailed the request is).
 • Each section object must include:
   – "Title": Short string (no symbols or sensitive words).
   – "DescriptionText": Simple paragraph (1–3 sentences). Use only safe, academic language.
@@ -167,7 +148,7 @@ User Prompt: ${userprompt}
 });
 
 // Key validation endpoint
-app.post("/validate-key", async (req, res) => {
+app.post("/validate", async (req, res) => {
   const { token } = req.body;
   if (!token) return res.status(400).json({ status: "MISSING_TOKEN" });
 
