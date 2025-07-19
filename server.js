@@ -7,10 +7,75 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const GEMINI_URL = (key) =>
+  `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${key}`;
+
+/**
+ * Validates an API token by sending a quick prompt.
+ * Returns an object { status, detail? } where status is one of:
+ *   VALID, MISSING_TOKEN, INVALID_KEY, OUT_OF_CREDITS, RATE_LIMITED, TIMEOUT, NETWORK_ERROR, UNKNOWN_ERROR
+ */
+async function validateToken(token) {
+  if (!token) {
+    return { status: "MISSING_TOKEN" };
+  }
+
+  try {
+    const resp = await axios.post(
+      GEMINI_URL(token),
+      { contents: [{ role: "user", parts: [{ text: "Reply with the word VALID if this key works." }] }] },
+      { headers: { "Content-Type": "application/json" }, timeout: 10000 }
+    );
+    const reply = resp.data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    if (reply.toLowerCase().includes("valid")) {
+      return { status: "VALID" };
+    } else {
+      return { status: "UNKNOWN_ERROR", detail: reply };
+    }
+  } catch (err) {
+    const code = err.response?.status;
+    const msg = err.response?.data?.error?.message || err.message;
+
+    if (err.code === "ECONNABORTED") {
+      return { status: "TIMEOUT", detail: msg };
+    }
+    if (err.code === "ENOTFOUND" || err.code === "ECONNREFUSED") {
+      return { status: "NETWORK_ERROR", detail: msg };
+    }
+    if (code === 401 || code === 403) {
+      const lower = msg.toLowerCase();
+      if (lower.includes("invalid") || lower.includes("unauthorized")) {
+        return { status: "INVALID_KEY", detail: msg };
+      }
+      return { status: "OUT_OF_CREDITS", detail: msg };
+    }
+    if (code === 429) {
+      return { status: "RATE_LIMITED", detail: msg };
+    }
+    return { status: "UNKNOWN_ERROR", detail: msg };
+  }
+}
+
+/**
+ * Sends a prompt to Gemini and returns the raw text reply.
+ */
+async function callGemini(token, prompt) {
+  const response = await axios.post(
+    GEMINI_URL(token),
+    { contents: [{ role: "user", parts: [{ text: prompt }] }] },
+    { headers: { "Content-Type": "application/json" }, timeout: 30000 }
+  );
+  return response.data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+}
+
 app.post("/quiz", async (req, res) => {
   const { token, userprompt } = req.body;
-  if (!token || !userprompt) {
-    return res.status(400).send("Missing token or parameters");
+  const validation = await validateToken(token);
+  if (validation.status !== "VALID") {
+    return res.json(validation);
+  }
+  if (!userprompt) {
+    return res.status(400).json({ status: "MISSING_PARAMETERS" });
   }
 
   const prompt = `
@@ -20,7 +85,7 @@ System Prompt:You are ReviewerieLua, a Roblox‑compatible quiz generator. Outpu
 
 Each question must include:
 - "Question": string with math allowed (no special symbols or emojis).
-- "TextToSpeechQuestion": string converted for spoken reading (e.g. “2^2” → “2 squared”, “3/2” → “3 divided by 2”).
+- "TextToSpeechQuestion": string converted for spoken reading (e.g. "2^2" → "2 squared", "3/2" → "3 divided by 2").
 - "QuestionType": integer (0 = multiple choice, 1 = typed answer, 2 = true/false).
 - "CorrectAnswers": array of lowercase strings; for QuestionType 1 math questions, include both numeric and word forms (e.g. "8", "eight").
 
@@ -31,62 +96,52 @@ If QuestionType = 1:
 - "CorrectAnswers" must contain 1–3 lowercase single words or numbers (no punctuation or spaces).
 
 If QuestionType = 2:
-- Set "Answers" to ["True", "False"].
+- Set "Answers" to ["true", "false"].
 
 Avoid names, slang, politics, violence, money, or filtered terms per Roblox ToS. Use educational vocabulary appropriate for ages 10–16. Do not include explanations, markdown, formatting, or extra text. Return only a valid JSON string that can be parsed by Roblox’s HttpService:JSONDecode.
 
 User Prompt: ${userprompt}
-`;
+`.trim();
 
   let retries = 0;
   const maxRetries = 3;
 
   while (true) {
     try {
-      const response = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${token}`,
-        { contents: [{ role: "user", parts: [{ text: prompt }] }] },
-        { headers: { "Content-Type": "application/json" }, timeout: 30000 }
-      );
-
-      let aiReply = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
+      let aiReply = await callGemini(token, prompt);
       if (!aiReply) throw new Error("Empty reply");
-
-      // Strip markdown code block if present
       aiReply = aiReply.trim().replace(/^```json\s*|```$/g, "").trim();
-
-      return res.json({ reply: aiReply , status: "VALID"});
-
+      return res.json({ status: "VALID", reply: aiReply });
     } catch (err) {
       const code = err.response?.data?.error?.code;
       const message = err.response?.data?.error?.message || "";
-
       if (code === 429 && retries < maxRetries) {
         retries++;
-        await new Promise(r => setTimeout(r, 2000 * retries));
+        await new Promise((r) => setTimeout(r, 2000 * retries));
         continue;
       }
       if (code === 429) return res.json({ status: "RATE_LIMITED" });
-
-      if (code === 403 || code === 401) {
-        if (message.toLowerCase().includes("invalid") ||
-            message.toLowerCase().includes("unauthorized") ||
-            message.toLowerCase().includes("permission")) {
+      if ((code === 403 || code === 401) && message) {
+        const lower = message.toLowerCase();
+        if (lower.includes("invalid") || lower.includes("unauthorized")) {
           return res.json({ status: "INVALID_KEY" });
         }
-        return res.json({ status: "__OUT_OF_CREDITS__" });
+        return res.json({ status: "OUT_OF_CREDITS" });
       }
-
-      console.error("GEMINI ERROR:", err.response?.data || err.message);
-      return res.status(500).send("Gemini request failed");
+      console.error("QUIZ GEMINI ERROR:", err.response?.data || err.message);
+      return res.status(500).json({ status: "UNKNOWN_ERROR", detail: err.message });
     }
   }
 });
 
 app.post("/document", async (req, res) => {
   const { token, userprompt } = req.body;
-  if (!token || !userprompt) {
-    return res.status(400).send("Missing token or parameters");
+  const validation = await validateToken(token);
+  if (validation.status !== "VALID") {
+    return res.json(validation);
+  }
+  if (!userprompt) {
+    return res.status(400).json({ status: "MISSING_PARAMETERS" });
   }
 
   const prompt = `
@@ -123,137 +178,45 @@ System Prompt:You are Reviewerie, a specialized assistant for generating safe, s
 • Do not include duplicate sections. Build understanding from basic to advanced.
 
 User Prompt: ${userprompt}
-`;
+`.trim();
 
   let retries = 0;
   const maxRetries = 3;
 
   while (true) {
     try {
-      const response = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${token}`,
-        { contents: [{ role: "user", parts: [{ text: prompt }] }] },
-        { headers: { "Content-Type": "application/json" }, timeout: 30000 }
-      );
-
-     let aiReply = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
+      let aiReply = await callGemini(token, prompt);
       if (!aiReply) throw new Error("Empty reply");
-
-      // Strip markdown code block if present
       aiReply = aiReply.trim().replace(/^```json\s*|```$/g, "").trim();
-
-      return res.json({ reply: aiReply });
+      return res.json({ status: "VALID", reply: aiReply });
     } catch (err) {
       const code = err.response?.data?.error?.code;
       const message = err.response?.data?.error?.message || "";
-
       if (code === 429 && retries < maxRetries) {
         retries++;
-        await new Promise(r => setTimeout(r, 2000 * retries));
+        await new Promise((r) => setTimeout(r, 2000 * retries));
         continue;
       }
-      if (code === 429) return res.json({ reply: "__RATE_LIMITED__" });
-
-      if (code === 403 || code === 401) {
-        if (message.toLowerCase().includes("invalid") ||
-            message.toLowerCase().includes("unauthorized") ||
-            message.toLowerCase().includes("permission")) {
-          return res.json({ reply: "__INVALID_KEY__" });
+      if (code === 429) return res.json({ status: "RATE_LIMITED" });
+      if ((code === 403 || code === 401) && message) {
+        const lower = message.toLowerCase();
+        if (lower.includes("invalid") || lower.includes("unauthorized")) {
+          return res.json({ status: "INVALID_KEY" });
         }
-        return res.json({ reply: "__OUT_OF_CREDITS__" });
+        return res.json({ status: "OUT_OF_CREDITS" });
       }
-
-      console.error("GEMINI ERROR:", err.response?.data || err.message);
-      return res.status(500).send("Gemini request failed");
+      console.error("DOCUMENT GEMINI ERROR:", err.response?.data || err.message);
+      return res.status(500).json({ status: "UNKNOWN_ERROR", detail: err.message });
     }
   }
 });
 
 app.post("/validate", async (req, res) => {
   const { token } = req.body;
-  if (!token) {
-    return res.status(400).json({ status: "MISSING_TOKEN" });
-  }
-
-  const testPrompt = "Reply with the word VALID if this key works.";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${token}`;
-  const requestConfig = {
-    headers: { "Content-Type": "application/json" },
-    timeout: 10000, // 10s
-  };
-
-  try {
-    const response = await axios.post(
-      url,
-      { contents: [{ role: "user", parts: [{ text: testPrompt }] }] },
-      requestConfig
-    );
-
-    const reply = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    if (reply.toLowerCase().includes("valid")) {
-      return res.json({ status: "VALID" });
-    } else {
-      return res.json({ status: "API_RESPONSE_UNEXPECTED", detail: reply });
-    }
-
-  } catch (err) {
-    // Axios timeout
-    if (err.code === "ECONNABORTED") {
-      return res.status(504).json({ status: "TIMEOUT", detail: "Request to Google API timed out" });
-    }
-    // Network / DNS errors
-    if (err.code === "ENOTFOUND" || err.code === "ECONNREFUSED") {
-      return res.status(503).json({ status: "NETWORK_ERROR", detail: err.message });
-    }
-
-    // HTTP errors with a response
-    const statusCode = err.response?.status;
-    const errorData = err.response?.data;
-    const errInfo = errorData?.error || {};
-    const msg = (errInfo.message || JSON.stringify(errorData)).toString();
-    const statusTag = errInfo.status;  // e.g. "RESOURCE_EXHAUSTED"
-
-    // Detect out-of-credits explicitly
-    if (statusTag === "RESOURCE_EXHAUSTED" || msg.toLowerCase().includes("quota")) {
-      return res.status(403).json({ status: "OUT_OF_CREDITS", detail: msg });
-    }
-
-    switch (statusCode) {
-      case 400:
-        return res.status(400).json({ status: "BAD_REQUEST", detail: msg });
-      case 401:
-        return res.status(401).json({ status: "INVALID_KEY", detail: msg });
-      case 403:
-        // permission vs invalid-key vs other 403
-        if (msg.toLowerCase().includes("permission")) {
-          return res.status(403).json({ status: "PERMISSION_DENIED", detail: msg });
-        } else {
-          return res.status(403).json({ status: "INVALID_KEY", detail: msg });
-        }
-      case 404:
-        return res.status(404).json({ status: "NOT_FOUND", detail: "Model or endpoint not found" });
-      case 408:
-        return res.status(408).json({ status: "REQUEST_TIMEOUT", detail: msg });
-      case 429:
-        return res.status(429).json({ status: "RATE_LIMITED", detail: "Too many requests" });
-      case 500:
-      case 502:
-      case 503:
-      case 504:
-        return res.status(statusCode).json({ status: "SERVICE_UNAVAILABLE", detail: msg });
-      default:
-        if (statusCode) {
-          return res
-            .status(statusCode)
-            .json({ status: "UNKNOWN_HTTP_ERROR", code: statusCode, detail: msg });
-        }
-        console.error("UNHANDLED ERROR:", err);
-        return res.status(500).json({ status: "UNKNOWN_ERROR", detail: err.message });
-    }
-  }
+  const validation = await validateToken(token);
+  const code = validation.status === "VALID" ? 200 : 400;
+  return res.status(code).json(validation);
 });
-
-
 
 const PORT = process.env.PORT || 3000;
 console.log("Starting server...");
