@@ -31,7 +31,7 @@ If QuestionType = 1:
 - "CorrectAnswers" must contain 1–3 lowercase single words or numbers (no punctuation or spaces).
 
 If QuestionType = 2:
-- Set "Answers" to ["true", "false"].
+- Set "Answers" to ["True", "False"].
 
 Avoid names, slang, politics, violence, money, or filtered terms per Roblox ToS. Use educational vocabulary appropriate for ages 10–16. Do not include explanations, markdown, formatting, or extra text. Return only a valid JSON string that can be parsed by Roblox’s HttpService:JSONDecode.
 
