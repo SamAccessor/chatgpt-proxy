@@ -7,7 +7,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Quiz endpoint using Gemini 2.5 Flash
 app.post("/quiz", async (req, res) => {
   const { token, userprompt } = req.body;
   if (!token || !userprompt) {
@@ -170,43 +169,86 @@ User Prompt: ${userprompt}
   }
 });
 
-// Key validation endpoint
 app.post("/validate", async (req, res) => {
   const { token } = req.body;
-  if (!token) return res.status(400).json({ status: "MISSING_TOKEN" });
+  if (!token) {
+    return res.status(400).json({ status: "MISSING_TOKEN" });
+  }
+
+  const testPrompt = "Reply with the word VALID if this key works.";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${token}`;
+  const requestConfig = {
+    headers: { "Content-Type": "application/json" },
+    timeout: 10000, // 10s
+  };
 
   try {
-    const testPrompt = "Reply with the word VALID if this key works.";
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${token}`,
+      url,
       { contents: [{ role: "user", parts: [{ text: testPrompt }] }] },
-      { headers: { "Content-Type": "application/json" }, timeout: 10000 }
+      requestConfig
     );
 
-    const reply = response.data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    // 2xx from Google → inspect reply
+    const reply = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
     if (reply.toLowerCase().includes("valid")) {
       return res.json({ status: "VALID" });
     } else {
-      return res.json({ status: "UNKNOWN_ERROR", detail: reply });
+      return res.json({ status: "API_RESPONSE_UNEXPECTED", detail: reply });
     }
+
   } catch (err) {
-    const code = err.response?.data?.error?.code;
-    const msg = err.response?.data?.error?.message || "";
-
-    if (code === 429) return res.json({ status: "OUT_OF_CREDITS" });
-    if (code === 401 || code === 403) {
-      if (msg.toLowerCase().includes("invalid") ||
-          msg.toLowerCase().includes("unauthorized") ||
-          msg.toLowerCase().includes("permission")) {
-        return res.json({ status: "INVALID_KEY" });
-      }
-      return res.json({ status: "OUT_OF_CREDITS" });
+    // Axios timeout
+    if (err.code === "ECONNABORTED") {
+      return res.status(504).json({ status: "TIMEOUT", detail: "Request to Google API timed out" });
     }
 
-    console.error("KEY VALIDATION ERROR:", msg);
-    return res.status(500).json({ status: "UNKNOWN_ERROR", error: msg });
+    // Network / DNS errors
+    if (err.code === "ENOTFOUND" || err.code === "ECONNREFUSED") {
+      return res.status(503).json({ status: "NETWORK_ERROR", detail: err.message });
+    }
+
+    // HTTP errors with a response
+    const statusCode = err.response?.status;
+    const errorData = err.response?.data;
+    const msg = (errorData?.error?.message || JSON.stringify(errorData)).toString();
+
+    switch (statusCode) {
+      case 400:
+        return res.status(400).json({ status: "BAD_REQUEST", detail: msg });
+      case 401:
+        return res.status(401).json({ status: "INVALID_KEY", detail: msg });
+      case 403:
+        // Could be out of scope or disabled API
+        if (msg.toLowerCase().includes("permission")) {
+          return res.status(403).json({ status: "PERMISSION_DENIED", detail: msg });
+        }
+        return res.status(403).json({ status: "INVALID_KEY", detail: msg });
+      case 404:
+        return res.status(404).json({ status: "NOT_FOUND", detail: "Model or endpoint not found" });
+      case 408:
+        return res.status(408).json({ status: "REQUEST_TIMEOUT", detail: msg });
+      case 429:
+        return res.status(429).json({ status: "RATE_LIMITED", detail: "Quota exceeded or too many requests" });
+      case 500:
+      case 502:
+      case 503:
+      case 504:
+        return res.status(statusCode).json({ status: "SERVICE_UNAVAILABLE", detail: msg });
+      default:
+        // Unexpected HTTP status
+        if (statusCode) {
+          return res
+            .status(statusCode)
+            .json({ status: "UNKNOWN_HTTP_ERROR", code: statusCode, detail: msg });
+        }
+        // Non-HTTP error fallback
+        console.error("UNHANDLED ERROR:", err);
+        return res.status(500).json({ status: "UNKNOWN_ERROR", detail: err.message });
+    }
   }
 });
+
 
 const PORT = process.env.PORT || 3000;
 console.log("Starting server...");
