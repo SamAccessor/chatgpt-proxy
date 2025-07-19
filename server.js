@@ -36,9 +36,14 @@ User Prompt: ${userprompt}
         { headers: { "Content-Type": "application/json" }, timeout: 30000 }
       );
 
-      const aiReply = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
+      let aiReply = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!aiReply) throw new Error("Empty reply");
+
+      // Strip markdown code block if present
+      aiReply = aiReply.trim().replace(/^```json\s*|```$/g, "").trim();
+
       return res.json({ reply: aiReply });
+
     } catch (err) {
       const code = err.response?.data?.error?.code;
       const message = err.response?.data?.error?.message || "";
