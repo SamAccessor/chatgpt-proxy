@@ -55,7 +55,7 @@ User Prompt: ${userprompt}
       // Strip markdown code block if present
       aiReply = aiReply.trim().replace(/^```json\s*|```$/g, "").trim();
 
-      return res.json({ reply: aiReply });
+      return res.json({ reply: aiReply , status: "VALID"});
 
     } catch (err) {
       const code = err.response?.data?.error?.code;
@@ -66,15 +66,15 @@ User Prompt: ${userprompt}
         await new Promise(r => setTimeout(r, 2000 * retries));
         continue;
       }
-      if (code === 429) return res.json({ reply: "__RATE_LIMITED__" });
+      if (code === 429) return res.json({ status: "RATE_LIMITED" });
 
       if (code === 403 || code === 401) {
         if (message.toLowerCase().includes("invalid") ||
             message.toLowerCase().includes("unauthorized") ||
             message.toLowerCase().includes("permission")) {
-          return res.json({ reply: "__INVALID_KEY__" });
+          return res.json({ status: "INVALID_KEY" });
         }
-        return res.json({ reply: "__OUT_OF_CREDITS__" });
+        return res.json({ status: "__OUT_OF_CREDITS__" });
       }
 
       console.error("GEMINI ERROR:", err.response?.data || err.message);
@@ -189,7 +189,6 @@ app.post("/validate", async (req, res) => {
       requestConfig
     );
 
-    // 2xx from Google → inspect reply
     const reply = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
     if (reply.toLowerCase().includes("valid")) {
       return res.json({ status: "VALID" });
@@ -202,7 +201,6 @@ app.post("/validate", async (req, res) => {
     if (err.code === "ECONNABORTED") {
       return res.status(504).json({ status: "TIMEOUT", detail: "Request to Google API timed out" });
     }
-
     // Network / DNS errors
     if (err.code === "ENOTFOUND" || err.code === "ECONNREFUSED") {
       return res.status(503).json({ status: "NETWORK_ERROR", detail: err.message });
@@ -211,7 +209,14 @@ app.post("/validate", async (req, res) => {
     // HTTP errors with a response
     const statusCode = err.response?.status;
     const errorData = err.response?.data;
-    const msg = (errorData?.error?.message || JSON.stringify(errorData)).toString();
+    const errInfo = errorData?.error || {};
+    const msg = (errInfo.message || JSON.stringify(errorData)).toString();
+    const statusTag = errInfo.status;  // e.g. "RESOURCE_EXHAUSTED"
+
+    // Detect out-of-credits explicitly
+    if (statusTag === "RESOURCE_EXHAUSTED" || msg.toLowerCase().includes("quota")) {
+      return res.status(403).json({ status: "OUT_OF_CREDITS", detail: msg });
+    }
 
     switch (statusCode) {
       case 400:
@@ -219,35 +224,35 @@ app.post("/validate", async (req, res) => {
       case 401:
         return res.status(401).json({ status: "INVALID_KEY", detail: msg });
       case 403:
-        // Could be out of scope or disabled API
+        // permission vs invalid-key vs other 403
         if (msg.toLowerCase().includes("permission")) {
           return res.status(403).json({ status: "PERMISSION_DENIED", detail: msg });
+        } else {
+          return res.status(403).json({ status: "INVALID_KEY", detail: msg });
         }
-        return res.status(403).json({ status: "INVALID_KEY", detail: msg });
       case 404:
         return res.status(404).json({ status: "NOT_FOUND", detail: "Model or endpoint not found" });
       case 408:
         return res.status(408).json({ status: "REQUEST_TIMEOUT", detail: msg });
       case 429:
-        return res.status(429).json({ status: "RATE_LIMITED", detail: "Quota exceeded or too many requests" });
+        return res.status(429).json({ status: "RATE_LIMITED", detail: "Too many requests" });
       case 500:
       case 502:
       case 503:
       case 504:
         return res.status(statusCode).json({ status: "SERVICE_UNAVAILABLE", detail: msg });
       default:
-        // Unexpected HTTP status
         if (statusCode) {
           return res
             .status(statusCode)
             .json({ status: "UNKNOWN_HTTP_ERROR", code: statusCode, detail: msg });
         }
-        // Non-HTTP error fallback
         console.error("UNHANDLED ERROR:", err);
         return res.status(500).json({ status: "UNKNOWN_ERROR", detail: err.message });
     }
   }
 });
+
 
 
 const PORT = process.env.PORT || 3000;
